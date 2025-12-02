@@ -6,247 +6,308 @@ import time
 from dotenv import load_dotenv
 import google.generativeai as genai
 from google.api_core import exceptions as api_exceptions
+import asyncio
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Input, Button, Static, RichLog
+from textual.containers import Container, Vertical
+from textual.css.query import NoMatches
+from textual.screen import Screen
+from rich.panel import Panel as RichPanel
 from rich.console import Console
-from rich.prompt import Confirm, Prompt
-from rich.panel import Panel
-from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn
 
-# --- CONFIGURATION & UTILITIES ---
+# --- CONFIG ---
 load_dotenv()
-console = Console()
+API_KEY = os.getenv("GEMINI_API_KEY")
 LOG_DIR = "logs"
 AUDIT_FILE = os.path.join(LOG_DIR, "agent_audit.log")
 
-# --- PLANNER ---
-class ModelPlanner:
-    """
-    Handles all communication with the LLM (Gemini).
-    Its responsibility is to turn text data into a structured command (the Plan).
-    """
-    def __init__(self, api_key):
-        genai.configure(api_key=api_key)
-        
-        self.response_schema = {
+if not API_KEY:
+    print("❌ Error: GEMINI_API_KEY is missing in .env file")
+    exit(1)
+
+genai.configure(api_key=API_KEY)
+
+# --- PLANNER & CONTROLLER ---
+response_schema = {
+    "type": "OBJECT",
+    "properties": {
+        "match_score": {"type": "NUMBER"},
+        "thought_process": {"type": "STRING"},
+        "command": {
             "type": "OBJECT",
             "properties": {
-                "match_score": {"type": "NUMBER"},
-                "thought_process": {"type": "STRING"},
-                "command": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "action": {"type": "STRING", "enum": ["MOVE_FILE", "SKIP"]},
-                        "destination_folder": {"type": "STRING", "enum": ["Interview_Candidates", "Rejected_Candidates"]}
-                    },
-                    "required": ["action", "destination_folder"]
-                }
+                "action": {"type": "STRING", "enum": ["MOVE_FILE", "SKIP"]},
+                "destination_folder": {"type": "STRING", "enum": ["Interview_Candidates", "Rejected_Candidates"]}
             },
-            "required": ["match_score", "thought_process", "command"]
+            "required": ["action", "destination_folder"]
         }
+    },
+    "required": ["match_score", "thought_process", "command"]
+}
 
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": self.response_schema,
+model = genai.GenerativeModel(
+    model_name="gemini-2.5-flash",
+    generation_config={
+        "response_mime_type": "application/json",
+        "response_schema": response_schema,
+    }
+)
+
+def analyze_resume(resume_text, job_desc, filename, max_retries=3):
+    prompt = f"""You are an Expert Technical Recruiter Agent.
+    JOB DESCRIPTION: "{job_desc}"
+    CANDIDATE RESUME ({filename}): "{resume_text}"
+    INSTRUCTIONS: 1. Analyze the resume fit. 2. Assign a score (0-100). 3. DECISION LOGIC: Score >= 70 -> Interview, Score < 70 -> Rejected."""
+    
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            if not response.text:
+                raise ValueError("LLM returned an empty or blocked response.")
+            return json.loads(response.text)
+        except (api_exceptions.ResourceExhausted, api_exceptions.ServiceUnavailable) as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise e
+        except Exception as e:
+            return {
+                "match_score": 0,
+                "thought_process": f"ERROR: Failed plan generation due to {type(e).__name__}.",
+                "command": {"action": "SKIP", "destination_folder": "Rejected_Candidates"}
             }
+    return {
+        "match_score": 0,
+        "thought_process": "CRITICAL: API failed permanently after retries.",
+    }
+
+def log_action(filename, action, folder, reason):
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_entry = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "file": filename,
+        "action": action,
+        "destination": folder,
+        "reason": reason
+    }
+    with open(AUDIT_FILE, "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
+
+# --- TEXTUAL APPLICATION ---
+class AuthorizationScreen(Screen):
+    def __init__(self, decision, filename, base_dir, **kwargs):
+        super().__init__(**kwargs)
+        self.decision = decision
+        self.filename = filename
+        self.base_dir = base_dir
+        self.recommended_folder = decision['command']['destination_folder']
+
+    def compose(self) -> ComposeResult:
+        yield Static("🤖 [bold]Agent Authorization Required[/bold]", classes="modal-title")
+
+        panel_content = (
+            f"File: {self.filename}\n"
+            f"Score: {self.decision['match_score']}/100\n"
+            f"RECOMMENDS: Move to {self.recommended_folder}\n\n"
+            f"Agent Reasoning:\n{self.decision.get('thought_process', 'No explanation provided by agent.')}"
         )
-        self.MAX_RETRIES = 3
 
-    def generate_plan(self, resume_text, job_desc, filename):
-        prompt = f"""
-        You are an Expert Technical Recruiter Agent.
-        
-        JOB DESCRIPTION:
-        "{job_desc}"
+        yield Static(RichPanel(panel_content, title="Decision", border_style="cyan"), classes="modal-panel")
 
-        CANDIDATE RESUME ({filename}):
-        "{resume_text}"
+        yield Container(
+            Button("APPROVE", variant="primary", id="btn_approve", classes="modal-button", flat=True),
+            Button("OVERRIDE / REJECT", variant="error", id="btn_override", classes="modal-button", flat=True)
+        )
 
-        INSTRUCTIONS:
-        1. Analyze the resume fit for the job.
-        2. Assign a match score (0-100).
-        3. DECISION LOGIC:
-           - If Score >= 70: Action is MOVE_FILE to "Interview_Candidates"
-           - If Score < 70: Action is MOVE_FILE to "Rejected_Candidates"
-        """
-        
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                response = self.model.generate_content(prompt)
-                
-                if not response.text:
-                    raise ValueError("LLM returned an empty or blocked response.")
-                    
-                return json.loads(response.text)
+    def on_button_pressed(self, event: Button.Pressed):
+        try:
+            modal_future = getattr(self.app, "_modal_future", None)
+            if modal_future is not None and not modal_future.done():
+                if event.button.id == "btn_approve":
+                    modal_future.set_result("APPROVE")
+                elif event.button.id == "btn_override":
+                    modal_future.set_result("OVERRIDE")
+        except Exception:
+            pass
+        self.app.pop_screen()
 
-            except (api_exceptions.ResourceExhausted, api_exceptions.ServiceUnavailable) as e:
-                if attempt < self.MAX_RETRIES - 1:
-                    sleep_time = 2 ** attempt
-                    console.print(f"[bold orange]⚠️ API Rate Limit Hit or Service Unavailable. Retrying in {sleep_time}s... (Attempt {attempt + 1}/{self.MAX_RETRIES})[/bold orange]")
-                    time.sleep(sleep_time)
-                    continue
-                else:
-                    console.print(f"[bold red]❌ Failed after {self.MAX_RETRIES} attempts due to API limits/unavailability.[/bold red]")
-                    raise e
-
-            except Exception as e:
-                console.print(f"[bold red]❌ Unexpected LLM Error for {filename}: {type(e).__name__} - {str(e)}[/bold red]")
-                
-                return {
-                    "match_score": 0,
-                    "thought_process": f"ERROR: Failed to generate plan due to: {type(e).__name__}. Skipped file.",
-                    "command": {"action": "SKIP", "destination_folder": "Rejected_Candidates"}
-        }
-
-        return {
-            "match_score": 0,
-            "thought_process": "CRITICAL: Unknown failure in ModelPlanner.",
-            "command": {"action": "SKIP", "destination_folder": "Rejected_Candidates"}
-        }
-
-# --- CONTROLLER ---
-class AgentController:
+class Recruiter(App[None]):
+    CSS = """
+    Screen { align: center middle; }
+    .title { height: 1; text-align: center; color: #1E90FF; text-style: bold; }
+    #log-area { height: 1fr; background: #222222; margin: 1 2; padding: 1; border: double #444444; }
+    #controls { height: auto; padding: 0 2; margin-top: 1; }
+    Input { width: 100%; height: 3; margin-bottom: 1; }
+    Button { min-width: 15; margin-right: 2; }
+    
+    /* Modal Styling */
+    AuthorizationModal {
+        width: 60%;
+        height: 60%;
+        border: thick $primary;
+        background: #111111;
+        padding: 2;
+        align: center middle;
+    }
+    .modal-title { color: yellow; text-style: bold; height: 1; margin-bottom: 2; }
+    .modal-panel { width: 100%; height: auto; }
+    .modal-button { width: 45%; }
     """
-    Handles execution of the plan (file operations) and user interaction (CLI/Logging).
-    """
-    def __init__(self, base_dir):
-        self.base_dir = base_dir # e.g., './data'
-        os.makedirs(LOG_DIR, exist_ok=True) 
 
-    def log_action(self, filename, action, folder, reason):
-        log_entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "file": filename,
-            "action": action,
-            "destination": folder,
-            "reason": reason
-        }
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Footer()
+        yield Static("[bold #1E90FF]🤖 Recruiter AI Agent[/bold #1E90FF]", classes="title")
         
-        with open(AUDIT_FILE, "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
+        with Container(id="controls"):
+            yield Input(placeholder="./data/job_description.txt", id="input_jd_path")
+            yield Input(placeholder="./data/inbox (Resumes Folder)", id="input_resume_dir")
+            yield Button("START ANALYSIS", variant="primary", id="btn_start", flat=True)
+            yield Button("STOP AGENT", variant="error", id="btn_stop", disabled=True, flat=True)
+        
+        yield RichLog(id="log-area", auto_scroll=True, wrap=True)
+        
+        self.job_desc = ""
+        self.candidates_dir = ""
+        self.files_to_process = []
+        self.num_processed = 0
+        self.processing_task = None
 
-    def execute_plan(self, decision, filename):
-        command = decision["command"]
+    def log_message(self, message):
+        self.log_widget.write(f"{datetime.datetime.now().strftime('%H:%M:%S')} {message}")
+
+    def on_mount(self):
+        self.log_widget = self.query_one("#log-area", RichLog)
+        self.title = ""
         
-        if command["action"] == "SKIP":
-            console.print(f"[yellow]   ⏭️  Skipped {filename}[/yellow]")
+        self.query_one("#input_jd_path", Input).value = "./data/job_description.txt"
+        self.query_one("#input_resume_dir", Input).value = "./data/inbox"
+        self.log_message("Recruiter Ready. Enter paths and press START.")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "btn_start":
+            self.start_processing()
+        elif event.button.id == "btn_stop":
+            self.stop_processing("User manually stopped the agent.")
+
+    def start_processing(self):
+        self.job_desc_path = self.query_one("#input_jd_path", Input).value
+        self.candidates_dir = self.query_one("#input_resume_dir", Input).value
+        
+        if not os.path.exists(self.candidates_dir) or not os.path.exists(self.job_desc_path):
+            self.log_message("❌ ERROR: One or both paths are invalid. Check paths.")
             return
 
-        recommended_folder = command["destination_folder"]
-        
-        console.print(Panel(
-            f"[bold]File:[/bold] {filename}\n"
-            f"[bold]Score:[/bold] {decision['match_score']}/100\n"
-            f"[bold]Reason:[/bold] {decision['thought_process']}\n"
-            f"[bold]Action:[/bold] Move to 📂 [cyan]{recommended_folder}[/cyan]",
-            title="🤖 Agent Request",
-            border_style="cyan"
-        ))
+        try:
+            with open(self.job_desc_path, "r") as f:
+                self.job_desc = f.read()
+            
+            self.files_to_process = [f for f in os.listdir(self.candidates_dir) if f.endswith(".txt")]
+            self.num_processed = 0
+            
+            if not self.files_to_process:
+                self.log_message("⚠️ No .txt resume files found in inbox.")
+                return
 
+            self.log_message(f"-- Starting Batch -- Found {len(self.files_to_process)} resumes.")
+            self.query_one("#btn_start", Button).disabled = True
+            self.query_one("#btn_stop", Button).disabled = True
+
+            self.processing_task = asyncio.create_task(self.process_resumes())
+
+        except Exception as e:
+            self.log_message(f"❌ CRITICAL READ ERROR: {str(e)}")
+            self.query_one("#btn_start", Button).disabled = False
+
+    def stop_processing(self, reason):
+        if self.processing_task:
+            self.processing_task.cancel()
+        self.log_message(f"🛑 {reason}")
+        self.query_one("#btn_start", Button).disabled = False
+        self.query_one("#btn_stop", Button).disabled = True
+    
+    async def process_resumes(self):
+        self.query_one("#btn_stop", Button).disabled = False
+
+        while self.num_processed < len(self.files_to_process):
+            filename = self.files_to_process[self.num_processed]
+            self.log_message(f"\n--- Processing File {self.num_processed + 1}/{len(self.files_to_process)}: {filename} ---")
+            
+            resume_path = os.path.join(self.candidates_dir, filename)
+            try:
+                with open(resume_path, "r") as f:
+                    resume_content = f.read()
+            except Exception as e:
+                self.log_message(f"❌ Read Error: Skipping {filename} ({str(e)})")
+                self.num_processed += 1
+                continue
+                
+            self.log_message(f"🧠 Thinking... Calling Gemini API.")
+            decision = await asyncio.to_thread(analyze_resume, resume_content, self.job_desc, filename)
+            
+            if decision['command']['action'] == "SKIP":
+                self.log_message(f"❌ API ERROR: Skipped {filename}. Reason: {decision['thought_process']}")
+                log_action(filename, "SKIP", "N/A", decision['thought_process'])
+                self.num_processed += 1
+                continue
+            self.log_message(f"Agent recommends: {decision['command'].get('destination_folder')} — Reason: {decision.get('thought_process','(no explanation)')}")
+            
+            try:
+                loop = asyncio.get_running_loop()
+                self._modal_future = loop.create_future()
+
+                await self.push_screen(AuthorizationScreen(decision, filename, self.candidates_dir))
+
+                try:
+                    action = await self._modal_future
+                finally:
+                    if hasattr(self, "_modal_future"):
+                        delattr(self, "_modal_future")
+
+                self.log_message(f"Decision Recommendation: {decision['command'].get('destination_folder')} | User Action: {action}")
+
+                self.execute_file_move(decision, filename, action)
+                
+            except Exception as e:
+                self.log_message(f"❌ EXECUTION ERROR: {str(e)}")
+                self.num_processed += 1
+                continue
+            
+            self.num_processed += 1
+
+        self.log_message("✅ Batch Finished! All files processed.")
+        self.call_after_refresh(lambda: self.stop_processing("Batch completed."))
+
+    def execute_file_move(self, decision, filename, user_action):
+        base_dir = os.path.dirname(self.candidates_dir) 
+        if base_dir == '': base_dir = '.'
+
+        recommended_folder = decision['command']['destination_folder']
         final_dest_folder = recommended_folder
-        log_reason = decision["thought_process"]
-        status_message = ""
+        log_reason = decision['thought_process']
         
-        if Confirm.ask("Authorize this action?"):
-            status_message = f"✅ Action Executed (Agent Recommended): Moved to {recommended_folder}"
-        else:
+        if user_action == "OVERRIDE":
             final_dest_folder = "Rejected_Candidates" if recommended_folder == "Interview_Candidates" else "Interview_Candidates"
-            log_reason = f"USER OVERRIDE: Agent recommended {recommended_folder}, but user manually moved to {final_dest_folder}."
-            console.print(f"[bold yellow]   ➡️ User Override! Moving to {final_dest_folder}.[/bold yellow]")
-            status_message = f"🟠 Action Executed (User Override): Moved to {final_dest_folder}"
-
-        source_path = os.path.join(self.base_dir, "inbox", filename)
-        final_dest_dir_path = os.path.join(self.base_dir, final_dest_folder) 
+            log_reason = f"USER OVERRIDE: Agent recommended {recommended_folder}, user moved to {final_dest_folder}. Agent Reason: {log_reason}"
+            self.log_message(f"➡️ USER OVERRIDE! Moving to {final_dest_folder}.")
+        elif user_action == "APPROVE":
+            self.log_message(f"✅ APPROVED: Moving to {recommended_folder}.")
+        
+        source_path = os.path.join(self.candidates_dir, filename)
+        final_dest_dir_path = os.path.join(base_dir, final_dest_folder)
         final_dest_path = os.path.join(final_dest_dir_path, filename)
-
-        if not os.path.exists(final_dest_dir_path):
-            os.makedirs(final_dest_dir_path)
         
         try:
+            if not os.path.exists(final_dest_dir_path):
+                os.makedirs(final_dest_dir_path)
+            
             shutil.move(source_path, final_dest_path)
-            console.print(f"[bold green]{status_message}[/bold green]\n")
-            self.log_action(filename, command["action"], final_dest_folder, log_reason)
+            log_action(filename, decision['command']['action'], final_dest_folder, log_reason)
+            self.log_message(f"✅ File moved successfully to 📂 {final_dest_folder}.")
         except Exception as e:
-            console.print(f"[bold red]   ❌ System Error: {str(e)}[/bold red]\n")
-
-
-# --- ORCHESTRATOR ---
-class MainRunner:
-    """
-    Manages the overall workflow, initialization, and the processing loop.
-    """
-    def __init__(self, api_key):
-        self.planner = ModelPlanner(api_key)
-        self.controller = None
-
-    def run(self):
-        console.print("[bold white on blue]  🤖 RECRUITER AI AGENT STARTING...  [/bold white on blue]\n")
-
-        candidates_dir = Prompt.ask("Enter path to resumes folder", default="./data/inbox")
-        job_desc_path = Prompt.ask("Enter path to Job Description file", default="./data/job_description.txt")
-
-        base_dir = os.path.dirname(candidates_dir) 
-        if base_dir == '':
-            base_dir = '.'
-        self.controller = AgentController(base_dir)
-
-        if not os.path.exists(candidates_dir) or not os.path.exists(job_desc_path):
-            console.print("[bold red]❌ Error: Directory or Job Description file not found. Ensure paths are correct.[/bold red]")
-            return
-
-        with open(job_desc_path, "r") as f:
-            job_description = f.read()
-        
-        files = [f for f in os.listdir(candidates_dir) if f.endswith(".txt")]
-        total_files = len(files)
-        console.print(f"[dim]Found {total_files} resumes to process...[/dim]\n")
-        
-        num_processed = 0
-
-        for file in files:
-            num_processed += 1
-            
-            resume_path = os.path.join(candidates_dir, file)
-            with open(resume_path, "r") as f:
-                resume_content = f.read()
-
-            decision = None
-            try:
-                with Progress(
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(bar_width=40),
-                    TimeElapsedColumn(),
-                    transient=True,
-                ) as progress:
-                    progress.add_task(description=f"Analyzing {file}...", total=None)
-                    decision = self.planner.generate_plan(resume_content, job_description, file)
-            except api_exceptions.PermissionDenied as e:
-                console.print(f"[bold red]❌ CRITICAL ERROR: API Key Invalid or Permission Denied. Stopping execution. ({e})[/bold red]")
-                break
-            except Exception as e:
-                console.print(f"[bold red]❌ CRITICAL ERROR: API connection failed permanently. Stopping execution. ({e})[/bold red]")
-                break
-            
-            if decision:
-                self.controller.execute_plan(decision, file)
-            
-            if num_processed < total_files:
-                console.print("--- Review Status ---")
-                
-                if not Confirm.ask(f"Continue processing the next resume? ({num_processed}/{total_files} processed)"):
-                    console.print(f"[bold yellow]🛑 User requested stop. Stopping review after {num_processed} of {total_files} resumes.[/bold yellow]")
-                    break
-
-        if num_processed == total_files:
-            console.print("[bold green]✨ All tasks completed. Agent shutting down.[/bold green]")
-        else:
-            console.print("[bold green]✨ Agent successfully shut down at user request.[/bold green]")
+            self.log_message(f"❌ System Error Moving File: {str(e)}")
 
 
 if __name__ == "__main__":
-    if not os.getenv("GEMINI_API_KEY"):
-        console.print("[bold red]❌ Error: GEMINI_API_KEY is missing in .env file[/bold red]")
-        exit(1)
-        
-    runner = MainRunner(os.getenv("GEMINI_API_KEY"))
-    runner.run()
+    app = Recruiter()
+    app.run()
