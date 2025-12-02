@@ -48,6 +48,7 @@ class ModelPlanner:
                 "response_schema": self.response_schema,
             }
         )
+        self.MAX_RETRIES = 3
 
     def generate_plan(self, resume_text, job_desc, filename):
         prompt = f"""
@@ -67,8 +68,39 @@ class ModelPlanner:
            - If Score < 70: Action is MOVE_FILE to "Rejected_Candidates"
         """
         
-        response = self.model.generate_content(prompt)
-        return json.loads(response.text)
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                response = self.model.generate_content(prompt)
+                
+                if not response.text:
+                    raise ValueError("LLM returned an empty or blocked response.")
+                    
+                return json.loads(response.text)
+
+            except (api_exceptions.ResourceExhausted, api_exceptions.ServiceUnavailable) as e:
+                if attempt < self.MAX_RETRIES - 1:
+                    sleep_time = 2 ** attempt
+                    console.print(f"[bold orange]⚠️ API Rate Limit Hit or Service Unavailable. Retrying in {sleep_time}s... (Attempt {attempt + 1}/{self.MAX_RETRIES})[/bold orange]")
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    console.print(f"[bold red]❌ Failed after {self.MAX_RETRIES} attempts due to API limits/unavailability.[/bold red]")
+                    raise e
+
+            except Exception as e:
+                console.print(f"[bold red]❌ Unexpected LLM Error for {filename}: {type(e).__name__} - {str(e)}[/bold red]")
+                
+                return {
+                    "match_score": 0,
+                    "thought_process": f"ERROR: Failed to generate plan due to: {type(e).__name__}. Skipped file.",
+                    "command": {"action": "SKIP", "destination_folder": "Rejected_Candidates"}
+        }
+
+        return {
+            "match_score": 0,
+            "thought_process": "CRITICAL: Unknown failure in ModelPlanner.",
+            "command": {"action": "SKIP", "destination_folder": "Rejected_Candidates"}
+        }
 
 # --- CONTROLLER ---
 class AgentController:
