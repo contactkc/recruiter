@@ -2,12 +2,14 @@ import os
 import shutil
 import json
 import datetime
+import time
 from dotenv import load_dotenv
 import google.generativeai as genai
+from google.api_core import exceptions as api_exceptions
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn
 
 # --- CONFIGURATION & UTILITIES ---
 load_dotenv()
@@ -208,15 +210,25 @@ class MainRunner:
             with open(resume_path, "r") as f:
                 resume_content = f.read()
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-            ) as progress:
-                progress.add_task(description=f"Analyzing {file}...", total=None)
-                decision = self.planner.generate_plan(resume_content, job_description, file)
+            decision = None
+            try:
+                with Progress(
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(bar_width=40),
+                    TimeElapsedColumn(),
+                    transient=True,
+                ) as progress:
+                    progress.add_task(description=f"Analyzing {file}...", total=None)
+                    decision = self.planner.generate_plan(resume_content, job_description, file)
+            except api_exceptions.PermissionDenied as e:
+                console.print(f"[bold red]❌ CRITICAL ERROR: API Key Invalid or Permission Denied. Stopping execution. ({e})[/bold red]")
+                break
+            except Exception as e:
+                console.print(f"[bold red]❌ CRITICAL ERROR: API connection failed permanently. Stopping execution. ({e})[/bold red]")
+                break
             
-            self.controller.execute_plan(decision, file)
+            if decision:
+                self.controller.execute_plan(decision, file)
             
             if num_processed < total_files:
                 console.print("--- Review Status ---")
