@@ -2,7 +2,7 @@
 
 Project Overview
 
-The Recruiter AI Agent is an autonomous command-line interface (CLI) application designed to automate the initial screening phase for job applications. It uses the Gemini API to analyze candidate resumes against a provided job description, then acts as an AI Agent to perform a physical action: sorting the files on the user's operating system.
+The Recruiter AI Agent is an autonomous text-based user interface (TUI) application designed to automate the initial screening phase for job applications. It uses the Gemini API to analyze candidate resumes against a provided job description, then acts as an AI Agent to perform a physical action: sorting the files on the user's operating system.
 
 This project successfully implements the Model-Controller-Planner (MCP) architectural pattern and adheres to all project requirements, emphasizing LLM integration, action execution, and robust human-in-the-loop safety.
 
