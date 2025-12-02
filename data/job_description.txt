@@ -1,0 +1,28 @@
+Job Title: Full-Stack Developer (MERN Stack)
+Company: Synergy Innovations
+
+We are seeking an experienced Full-Stack Developer to join our team, focusing on building and scaling high-traffic web applications.
+
+Required Qualifications & Skills:
+
+3+ years professional experience in Full-Stack development.
+
+Expert proficiency in JavaScript and TypeScript.
+
+Mandatory experience with the MERN stack: MongoDB, Express.js, React, and Node.js.
+
+Strong ability to design and implement RESTful APIs.
+
+Experience with state management libraries (e.g., Redux or Context API).
+
+Familiarity with AWS cloud services (S3, Lambda) is a plus.
+
+Proficiency in modern CSS frameworks like Tailwind CSS.
+
+Key Responsibilities:
+
+Develop scalable and well-tested front-end user interfaces using React/Redux.
+
+Implement robust and secure back-end services using Node.js and Express.
+
+Manage and optimize MongoDB data models.

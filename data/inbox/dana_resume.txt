@@ -1,0 +1,5 @@
+Name: Dana Scully
+Title: Junior Full-Stack Engineer
+Experience: 2 years.
+Summary: Dedicated Full-Stack developer with 2 years of professional experience building web applications. Expert with JavaScript and proficient in TypeScript. Used React for all modern front-end work, coupled with Node.js and Express.js on the back-end. Managed data in MongoDB for smaller-scale projects. I am highly familiar with best practices for consuming and building RESTful APIs.
+Skills: JavaScript, TypeScript, React, Node.js, Express.js, MongoDB, RESTful APIs, Context API.

@@ -1,0 +1,5 @@
+Name: Fiona Green
+Title: Technical Writer / Documentation Specialist
+Experience: 5 years.
+Summary: Wrote and maintained technical documentation for the entire MERN stack development team. In this role, I maintained internal Node.js tools, assisted with React component debugging, and directly managed MongoDB connection strings. My work required deep knowledge of RESTful API design and TypeScript structure to create accurate guides. I created a custom internal UI using Tailwind CSS for testing documentation builds.
+Skills: TypeScript, Node.js, React, MongoDB, RESTful APIs, Tailwind CSS, Documentation.

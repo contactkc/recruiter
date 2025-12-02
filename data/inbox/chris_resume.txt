@@ -1,0 +1,5 @@
+Name: Chris Evans
+Title: Full-Stack Developer
+Experience: 4 years.
+Summary: Proven expertise in developing and deploying scalable web services. I strictly use the MERN stack for new projects, leading to a 40% reduction in deployment time on my last two projects. Implemented a complex data visualization dashboard using React and Redux, which handles over 10,000 requests per minute routed through an Express.js API. I designed a new MongoDB schema that improved query efficiency by 25%.
+Skills: React, Node.js, Express.js, MongoDB, JavaScript, TypeScript, Redux, RESTful APIs, Git.

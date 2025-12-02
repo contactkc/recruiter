@@ -1,0 +1,5 @@
+Name: Alex Chen
+Title: Front-End Developer
+Experience: 3 years building web applications.
+Summary: Focused expertise in front-end architecture. Built single-page applications using React and Context API. Very strong in JavaScript and modern CSS/Tailwind CSS for pixel-perfect design. While my back-end experience is limited, I have integrated with numerous RESTful APIs built in Node.js and have basic experience managing data in MongoDB collections for testing.
+Skills: React, JavaScript, Context API, HTML5, CSS, Tailwind CSS, RESTful APIs, Webpack.

@@ -1,0 +1,5 @@
+Name: Jane Doe
+Title: Senior Software Engineer
+Experience: 4 years Full-Stack development at TechCorp.
+Summary: Led the architecture and deployment of a customer-facing portal using the complete MERN stack. Reduced API latency by 30% by optimizing MongoDB queries and scaling Express.js services. Implemented responsive UI components using TypeScript and React, styled with Tailwind CSS. Utilized Redux for predictable state management across the application. Successfully deployed services using AWS Lambda functions.
+Skills: JavaScript, TypeScript, React, Node.js, Express.js, MongoDB, Redux, AWS, RESTful APIs, Tailwind CSS.

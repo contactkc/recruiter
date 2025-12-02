@@ -1,0 +1,5 @@
+Name: Edward Norton
+Title: Senior Web Developer
+Experience: 8 years.
+Summary: Highly experienced Senior developer specializing in high-load back-end systems. Core technology stack includes Python, Django, and PostgreSQL. Designed and scaled dozens of complex RESTful APIs. I have significant front-end experience using Vue.js and SASS, and I am comfortable with cloud infrastructure, particularly Google Cloud (GCP).
+Skills: Python, Django, PostgreSQL, Vue.js, RESTful APIs, Google Cloud, TypeScript.

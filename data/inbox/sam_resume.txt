@@ -1,0 +1,5 @@
+Name: Sam Lee
+Title: Back-End Engineer
+Experience: 7 years developing services.
+Summary: I specialize in robust, high-performance back-end systems. My core expertise is in Java Spring Boot and relational databases like PostgreSQL. I am very strong at designing and deploying RESTful APIs and have advanced AWS cloud experience, including Lambda and S3. I have no professional experience with React, Redux, or any modern CSS frameworks.
+Skills: Java, Spring Boot, PostgreSQL, AWS, RESTful APIs, Docker, Python.
